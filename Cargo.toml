@@ -1,0 +1,15 @@
+[package]
+name = "ble-re-stuff-idk"
+version = "0.1.0"
+edition = "2021"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+tokio = { version = "1.21.2", features = ["full"] }
+btleplug = { version =  "0.10.1", features = ["serde"] }
+pretty_env_logger = "0.4.0"
+rand = "0.8.5"
+uuid = "1.2.1"
+futures = "0.3.25"
+tokio-stream = { version = "0.1.11", features = ["sync"] }
