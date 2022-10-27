@@ -3,12 +3,15 @@
 use btleplug::api::{Central, CentralEvent, CharPropFlags, Manager as _, Peripheral as _, ScanFilter, WriteType};
 use btleplug::platform::{Adapter, Manager, Peripheral};
 use std::error::Error;
+use std::process::exit;
 use std::time::Duration;
-use btleplug::api::bleuuid::{BleUuid, uuid_from_u16};
-use btleplug::Error::Uuid;
+use btleplug::api::bleuuid::uuid_from_u16;
 use futures::StreamExt;
 
-use tokio::{task, time};
+use tokio::time;
+
+#[macro_use]
+extern crate tracing;
 
 async fn get_central(manager: &Manager) -> Adapter {
     let adapters = manager.adapters().await.unwrap();
@@ -31,16 +34,16 @@ async fn is_tracker(p: &Peripheral) -> bool {
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn Error>> {
-    pretty_env_logger::init();
+    tracing_subscriber::fmt::init();
 
-    println!("Creating manager");
+    info!("Creating manager");
     let manager = Manager::new().await?;
 
-    println!("Searching for adapter");
+    info!("Searching for adapter");
 
     let central = get_central(&manager).await;
 
-    println!("Scanning for devices");
+    info!("Scanning for devices");
 
     let mut events = central.events().await?;
 
@@ -52,13 +55,12 @@ async fn main() -> Result<(), Box<dyn Error>> {
                 //println!("DeviceDiscovered: {:?}", id);
                 let p = central.peripheral(&id).await.unwrap();
                 if is_tracker(&p).await {
-                    println!("Found tracker: {:?}", p.properties().await.unwrap().unwrap().local_name);
+                    info!("Found device: {:?}", p.properties().await.unwrap().unwrap().local_name);
                     p.connect().await?;
-                    println!("Connected to tracker");
+                    info!("Connected to tracker");
                     p.discover_services().await?;
-                    println!("Discovered services");
                     let characteristics = p.characteristics();
-                    println!("Found {} characteristics", characteristics.len());
+                    info!("Found {} characteristics", characteristics.len());
 
                     let services = p.services();
                     for service in services {
@@ -75,9 +77,11 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
                     // for sending commands
                     let request_ch = p.characteristics().iter().find(|c| c.uuid == uuid_from_u16(0x0af6)).unwrap().clone();
+                    info!("Found request characteristic: {:?}", request_ch);
 
                     // for receiving data
                     let response_ch = p.characteristics().iter().find(|c| c.uuid == uuid_from_u16(0x0af7)).unwrap().clone();
+                    info!("Found response characteristic: {:?}", response_ch);
 
                     let cmd = vec![0x02, 0xa0];
                     p.write(&request_ch, &cmd, WriteType::WithResponse).await?;
@@ -85,14 +89,12 @@ async fn main() -> Result<(), Box<dyn Error>> {
                     let mut notification_stream =
                         p.notifications().await?;
 
-                    let request_ch_clone = request_ch.clone();
-
                     tokio::spawn(async move {
                         while let Some(notification) = notification_stream.next().await {
                             if notification.uuid == response_ch.uuid {
                                 let data = notification.value;
                                 if data.len() < 3 {
-                                    println!("Invalid data - [{}] {:?}", notification.uuid, data);
+                                    warn!("Invalid data - [{}] {:?}", notification.uuid, data);
                                     continue;
                                 }
 
@@ -102,56 +104,42 @@ async fn main() -> Result<(), Box<dyn Error>> {
                                 match n_type {
                                     0xa002 => {
                                         let hr = n_data[n_data.len() - 1];
-                                        println!("Heart rate: {}", hr);
+                                        info!("Heart rate: {}", hr);
 
-                                        time::sleep(Duration::from_secs(1)).await;
-                                        p.write(&request_ch_clone, &cmd, WriteType::WithResponse).await.expect("Unable to write");
+                                        let cmd_clone = cmd.clone();
+                                        let p_clone = p.clone();
+                                        let request_ch_clone = request_ch.clone();
+
+                                        tokio::task::spawn(async move {
+                                            time::sleep(Duration::from_secs(1)).await;
+                                            p_clone.write(&request_ch_clone, &cmd_clone, WriteType::WithResponse).await.expect("Failed to write");
+                                        });
                                     },
                                     0x0107 => {
-                                        println!("Button pressed");
+                                        info!("Button pressed");
                                     }
                                     _ => {
-                                        println!("Unknown type {:x} - Data: {:?}", n_type, n_data);
+                                        warn!("Unknown type {:x} - Data: {:?}", n_type, n_data);
                                     }
                                 }
                             } else {
-                                println!("unknown notification: {:?}", notification);
+                                warn!("unknown notification: {:?}", notification);
                             }
                         }
                     });
-                    println!("Waiting for notifications");
+                    info!("Waiting for notifications");
                 }
             }
             CentralEvent::DeviceConnected(id) => {
-                println!("DeviceConnected: {:?}", id);
+                info!("Connected to device {:?}", id);
             }
             CentralEvent::DeviceDisconnected(id) => {
-                println!("DeviceDisconnected: {:?}", id);
+                println!("Disconnected from {:?}", id);
+                exit(0);
             }
             _ => {}
         }
     }
 
-    time::sleep(Duration::from_secs(2)).await;
-
-    /*
-
-    // find the characteristic we want
-    let chars = tracker.characteristics();
-    let cmd_char = chars
-        .iter()
-        .find(|c| c.uuid == LIGHT_CHARACTERISTIC_UUID)
-        .expect("Unable to find characterics");
-
-    // dance party
-    let mut rng = thread_rng();
-    for _ in 0..20 {
-        let color_cmd = vec![0x56, rng.gen(), rng.gen(), rng.gen(), 0x00, 0xF0, 0xAA];
-        tracker
-            .write(&cmd_char, &color_cmd, WriteType::WithoutResponse)
-            .await?;
-        time::sleep(Duration::from_millis(200)).await;
-    }
-    */
     Ok(())
 }
