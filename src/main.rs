@@ -1,14 +1,18 @@
 #![feature(async_closure)]
 
+mod util;
+
 use btleplug::api::{Central, CentralEvent, CharPropFlags, Manager as _, Peripheral as _, ScanFilter, WriteType};
 use btleplug::platform::{Adapter, Manager, Peripheral};
 use std::error::Error;
 use std::process::exit;
 use std::time::Duration;
 use btleplug::api::bleuuid::uuid_from_u16;
+use enigo::{Enigo, Key};
 use futures::StreamExt;
 
 use tokio::time;
+use crate::util::{key_down, key_up};
 
 #[macro_use]
 extern crate tracing;
@@ -90,6 +94,8 @@ async fn main() -> Result<(), Box<dyn Error>> {
                         p.notifications().await?;
 
                     tokio::spawn(async move {
+                        let mut enigo = Enigo::new();
+
                         while let Some(notification) = notification_stream.next().await {
                             if notification.uuid == response_ch.uuid {
                                 let data = notification.value;
@@ -104,7 +110,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
                                 match n_type {
                                     0xa002 => {
                                         let hr = n_data[n_data.len() - 1];
-                                        info!("Heart rate: {}", hr);
+                                        //info!("Heart rate: {}", hr);
 
                                         let cmd_clone = cmd.clone();
                                         let p_clone = p.clone();
@@ -117,6 +123,8 @@ async fn main() -> Result<(), Box<dyn Error>> {
                                     },
                                     0x0107 => {
                                         info!("Button pressed");
+                                        key_down(&mut enigo, Key::Space);
+                                        key_up(&mut enigo, Key::Space);
                                     }
                                     _ => {
                                         warn!("Unknown type {:x} - Data: {:?}", n_type, n_data);
